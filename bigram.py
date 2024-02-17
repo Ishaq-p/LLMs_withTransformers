@@ -8,14 +8,14 @@ import random
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-blockSize = 256
-batchSize = 64
-epochs = 3000
+blockSize = 128
+batchSize = 32
+epochs = 5000
 learningRate = 3e-4
 evalEpoch = 300
-n_embed=32
-n_head = 6
-n_layer = 6
+n_embed=16
+n_head = 3
+n_layer = 3
 dropout = 0.2
 
 
@@ -68,6 +68,7 @@ class Head(nn.Module):
         self.query = nn.Linear(n_embed, headSize, bias=False)
         self.value = nn.Linear(n_embed, headSize, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(blockSize,blockSize)))
+        self.dropout = nn.Dropout(dropout)
     
     def forward(self, x):
         B,T,C = x.shape
@@ -77,6 +78,7 @@ class Head(nn.Module):
         wei = q @ k.transpose(-2,-1) * C**-0.5
         wei = wei.masked_fill(self.tril[:T, :T]==0, float('-inf'))
         wei = F.softmax(wei, dim=-1)
+        wei = self.dropout(wei)
 
         v = self.value(x)
         out = wei @ v
@@ -86,10 +88,12 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, numHeads, headSize):
         super().__init__()
         self.heads = nn.ModuleList([Head(headSize) for _ in range(numHeads)])
-        self.proj = nn.Linear(n_embed, n_embed)
+        self.proj = nn.Linear(headSize*numHeads, n_embed)
+        self.dropout =  nn.Dropout(dropout)
+
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
-        out = self.proj(out)
+        out = self.dropout(self.proj(out))
         return out
 
 
@@ -100,6 +104,7 @@ class FeedForward(nn.Module):
             nn.Linear(n_embd, 4*n_embd),
             nn.ReLU(),
             nn.Linear(4*n_embd, n_embd),
+            nn.Dropout(dropout)
         )
     def forward(self, x):
         return self.net(x)
@@ -125,23 +130,20 @@ class BigramLangModel(nn.Module):
         # -----------------new stuff-------------
         self.tokenEmbeddingTable = nn.Embedding(vocab_size, n_embed)
         self.positionEmbedding_table = nn.Embedding(blockSize, n_embed)
-        self.blocks = nn.Sequential(
-            Block(n_embed, n_head=4),
-            Block(n_embed, n_head=4),
-            Block(n_embed, n_head=4),
-            nn.LayerNorm(n_embed),
-        )
+        self.blocks = nn.Sequential(*[Block(n_embed, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
         # -----------------------------------------
     
     def forward(self, index, target=None):
         # -----------new stuff----------------
         # print(index.shape)
-        B, T = index.shape
-        token_embd = self.tokenEmbeddingTable(index)   # (B, T, C)
+        B, T = index.shape    # Batch, Token
+        token_embd = self.tokenEmbeddingTable(index)   # (B, T, C)  (Batch, Token, Channel)
         pos_emd = self.positionEmbedding_table(torch.arange(T, device=device))
         x = token_embd + pos_emd
         x = self.blocks(x)
+        x = self.ln_f(x)
         logits = self.lm_head(x)  # (B, T, vocabSize)
         # ----------------------------------------
         
