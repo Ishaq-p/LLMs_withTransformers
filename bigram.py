@@ -1,10 +1,7 @@
 import torch
-import numpy as np
 import matplotlib.pyplot as plt
-import time
 import torch.nn as nn
 import torch.nn.functional as F
-import random
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
